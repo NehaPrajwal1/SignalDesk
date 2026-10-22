@@ -24,9 +24,11 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
       - name: Static correctness checks
-        run: ruff check --select E9,F63,F7,F82 .
+        run: |
+          python -m compileall -q api.py core.py app.py platform_ops.py mcp_server.py slack_bot.py simulate.py tests
+          ruff check --select E9,F63,F7,F82 .
       - name: API, data, concurrency, Slack, agent, and dashboard checks
-        run: python -m pytest -q --cov=api --cov=core --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
+        run: python -m pytest -q --cov=api --cov=core --cov=platform_ops --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
       - name: Install Chromium
         if: matrix.python-version == '3.11'
         run: python -m playwright install --with-deps chromium
@@ -46,6 +48,9 @@ jobs:
           path: verification/
           retention-days: 30
   containers:
+    env:
+      SIGNALDESK_API_TOKEN: ci-api-test-token
+      SIGNALDESK_MCP_TOKEN: ci-mcp-test-token
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -57,6 +62,12 @@ jobs:
           curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/api/health
           curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8501/_stcore/health
           curl --fail http://127.0.0.1:8000/metrics | grep signaldesk_open_incidents
+      - name: Verify MCP authentication and real protocol handshake
+        run: |
+          mkdir -p verification
+          test "$(curl --retry 10 --retry-connrefused --retry-delay 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/mcp)" = "401"
+          curl --fail -s http://127.0.0.1:8001/mcp -H "Authorization: Bearer $SIGNALDESK_MCP_TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' > verification/mcp-initialize.json
+          python -c "import json; assert json.load(open('verification/mcp-initialize.json'))['result']['serverInfo']['name'] == 'SignalDesk'"
       - name: Save container logs
         if: always()
         run: |
