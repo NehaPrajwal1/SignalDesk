@@ -229,3 +229,11 @@ def test_fixture_is_deterministic_and_replayable(client):
     result = client.post("/api/telemetry", json={"records": demo_rows()}).json()
     assert (result["accepted"], result["duplicates"], result["rejected"]) == (360, 1, 1)
     assert sum(row["requests"] for row in client.get("/api/services").json()) == 360
+
+
+def test_support_arrival_trend_matches_incident_counts(client):
+    alert(client, severity="P1")
+    alert(client, severity="P2")
+    result = client.get("/api/support").json()
+    assert sum(row["incidents"] for row in result["created_daily"]) == result["total"] == 2
+    assert {row["severity"] for row in result["created_daily"]} == {"P1", "P2"}
