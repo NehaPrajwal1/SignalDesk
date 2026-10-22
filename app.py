@@ -159,3 +159,25 @@ with st.expander("Telemetry ingestion and data quality"):
                 st.error("Each non-empty line must contain valid UTF-8 JSON.")
     if quality["recent_batches"]:
         st.dataframe(pd.DataFrame(quality["recent_batches"]), hide_index=True, use_container_width=True)
+
+
+@st.fragment(run_every="5s")
+def operational_panel():
+    st.subheader("Live workload and container telemetry")
+    st.caption("Refreshes every 5 seconds. Start simulate.py or POST /api/workloads. Samples are not a live Kubernetes connection.")
+    rows = call("GET", "/api/workloads" + scope)
+    if rows:
+        frame = pd.DataFrame(rows)
+        st.dataframe(frame[["at", "service", "kind", "pod", "cpu_percent", "memory_percent", "restarts", "failed"]], hide_index=True, use_container_width=True)
+        chart = frame.copy()
+        chart["at"] = pd.to_datetime(chart["at"], utc=True)
+        chart = chart.sort_values("at").set_index("at")
+        st.line_chart(chart[["cpu_percent", "memory_percent"]])
+        st.caption("Container percentages are sample values; mixed services are shown in timestamp order. Filter Service scope for one service.")
+        with st.expander("Ingested log evidence"):
+            st.json(rows[:10])
+    elif rows is not None:
+        st.info("No operational samples yet. Run: python simulate.py --count 60")
+
+
+operational_panel()
