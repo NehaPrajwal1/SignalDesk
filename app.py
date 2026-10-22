@@ -27,7 +27,7 @@ headers = {"Authorization": "Bearer " + token} if token else {}
 
 def call(method, path, payload=None, extra_headers=None):
     try:
-        response = requests.request(method, api_url + path, json=payload, headers={**headers, **(extra_headers or {})}, timeout=30)
+        response = requests.request(method, api_url + path, json=payload, headers={**headers, **(extra_headers or {})}, timeout=60)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
@@ -105,6 +105,10 @@ if incidents:
         st.write(" → ".join(triage["tool_trace"]))
         st.write("Citations: " + ", ".join(triage["citations"]))
         st.json(triage["evidence"])
+    with st.expander("Latest automatic investigation"):
+        saved = load("/api/investigations/" + selected)
+        st.caption("A saved investigation is a point-in-time snapshot; check its timestamp against newer incident changes.")
+        st.json(saved)
     with st.expander("Incident history"):
         st.dataframe(pd.DataFrame(load(f"/api/incidents/{selected}/events")), hide_index=True, use_container_width=True)
     with st.form("status-" + selected):
@@ -116,12 +120,13 @@ if incidents:
         if result:
             st.rerun()
     with st.expander("Optional local LLM draft"):
-        st.caption("Uses the API server's configured Ollama endpoint. Model output is unverified and cannot execute tools or send messages.")
+        st.caption("Uses the API server's configured Ollama endpoint. The model can select three read-only evidence tools. Its draft is unverified; this UI sends no messages and executes no remediation.")
         if st.button("Draft from evidence"):
             result = call("POST", "/api/agent/" + selected, {"use_llm": True})
             if result:
                 st.write(result["llm_status"])
                 st.text(result.get("llm_draft", result["summary"]))
+                st.json(result.get("agent_trace", []))
 else:
     st.info("No incidents match the filters.")
 
