@@ -1,179 +1,157 @@
-from __future__ import annotations
-
+"""Customer-facing support dashboard. Run: streamlit run app.py."""
 import json
 import os
+import uuid
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import pandas as pd
 import requests
 import streamlit as st
+from core import SERVICES, STATUSES, demo_rows
 
-st.set_page_config(page_title="SignalDesk | Data Platform", page_icon="📡", layout="wide")
-SERVICES = ["Spark", "Flink", "Airflow", "Trino", "Druid", "Notebook Hub"]
-
-st.title("📡 SignalDesk")
-st.caption("Data Platform Support Workbench · synthetic telemetry + persistent incident workflow")
-
+st.set_page_config(page_title="SignalDesk", page_icon="📡", layout="wide")
+st.title("SignalDesk · Data Platform Support")
+st.caption("Customer impact, operational evidence, and a reviewable support workflow")
+api_url = os.getenv("SIGNALDESK_API_URL", "http://127.0.0.1:8000").rstrip("/")
 with st.sidebar:
-    st.header("Connections")
-    api_url = st.text_input("SignalDesk API", os.getenv("SIGNALDESK_API_URL", "http://127.0.0.1:8000")).rstrip("/")
-    ingest_token = st.text_input("Alert API token (optional for local demo)", os.getenv("SIGNALDESK_API_TOKEN", ""), type="password")
-    ollama_url = st.text_input("Local Ollama URL", os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).rstrip("/")
-    ollama_model = st.text_input("Ollama model", os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
-    st.divider()
-    st.caption("Demo signals are generated. Incident records are stored by the API in SQLite.")
+    st.header("Workspace")
+    st.caption(f"API: {api_url}")
+    token = st.text_input("API token", os.getenv("SIGNALDESK_API_TOKEN", ""), type="password")
+    chosen_service = st.selectbox("Service scope", ["All services", *SERVICES])
+    severities = st.multiselect("Severity", ["P1", "P2", "P3"], default=["P1", "P2", "P3"])
+    if st.button("Refresh"):
+        st.rerun()
+headers = {"Authorization": "Bearer " + token} if token else {}
 
 
-def api_get(path: str, params: dict | None = None):
+def call(method, path, payload=None, extra_headers=None):
     try:
-        response = requests.get(f"{api_url}{path}", params=params, timeout=5)
+        response = requests.request(method, api_url + path, json=payload, headers={**headers, **(extra_headers or {})}, timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        st.error(f"Cannot reach the SignalDesk API at {api_url}: {exc}")
-        st.info("Start it in another terminal with: uvicorn api:app --reload")
-        st.stop()
-
-
-def api_write(method: str, path: str, payload: dict):
-    headers = {"Authorization": f"Bearer {ingest_token}"} if ingest_token else {}
-    try:
-        response = requests.request(method, f"{api_url}{path}", json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as exc:
-        detail = exc.response.text if exc.response is not None else str(exc)
-        st.error(f"API request failed: {detail}")
+        status = exc.response.status_code if exc.response is not None else "unreachable"
+        st.error(f"API request failed ({status}). Check the API process and token. For a 409 conflict, refresh and retry.")
         return None
 
 
-health = api_get("/api/health")
-services = api_get("/api/services")
-traffic = api_get("/api/traffic")
-incidents = api_get("/api/incidents")
+def load(path):
+    result = call("GET", path)
+    if result is None:
+        st.info("Start the API with: uvicorn api:app --reload")
+        st.stop()
+    return result
 
-with st.sidebar:
-    selected_services = st.multiselect("Services", SERVICES, default=SERVICES)
-    severity_filter = st.multiselect("Severity", ["P1", "P2", "P3"], default=["P1", "P2", "P3"])
-    if st.button("Refresh dashboard", use_container_width=True):
-        st.rerun()
 
-health_rows = [row for row in services if row["service"] in selected_services]
-incident_rows = [row for row in incidents if row["service"] in selected_services and row["severity"] in severity_filter]
-open_rows = [row for row in incident_rows if row["status"] != "Mitigated"]
-p1_rows = [row for row in open_rows if row["severity"] == "P1"]
-availability = sum(row["availability_pct"] for row in health_rows) / len(health_rows) if health_rows else 0
-mean_error = sum(row["error_rate_pct"] for row in health_rows) / len(health_rows) if health_rows else 0
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Platform availability", f"{availability:.2f}%", "synthetic sample")
-m2.metric("Open support incidents", len(open_rows), f"{len(p1_rows)} P1")
-m3.metric("Mean error rate", f"{mean_error:.2f}%", "synthetic sample")
-m4.metric("Services in scope", len(health_rows), "of 6 services")
-
-left, right = st.columns([1.25, 1])
-with left:
-    st.subheader("Traffic and error signals")
-    st.caption("Synthetic 24-hour sample · separate scales")
-    frame = pd.DataFrame(traffic)
-    if not frame.empty:
-        frame = frame.set_index("time")
-        charts = st.columns(2)
-        with charts[0]:
-            st.caption("Requests (thousands)")
-            st.line_chart(frame[["requests_k"]], height=220)
-        with charts[1]:
-            st.caption("Error rate (%)")
-            st.line_chart(frame[["error_rate_pct"]], height=220)
-with right:
-    st.subheader("Service health")
-    if health_rows:
-        st.dataframe(pd.DataFrame(health_rows), hide_index=True, use_container_width=True)
-    else:
-        st.info("Select at least one service.")
-
-st.subheader("Support queue")
-if incident_rows:
-    st.dataframe(pd.DataFrame(incident_rows)[["id", "opened_at", "severity", "service", "signal", "status", "impact", "source"]], hide_index=True, use_container_width=True)
+health = load("/api/health")
+st.info(f"Data source: {health['data_mode']}. Charts describe the stored sample window; they are not a live production availability claim.")
+scope = "" if chosen_service == "All services" else "?service=" + quote(chosen_service)
+services = load("/api/services" + scope)
+traffic = load("/api/traffic" + scope)
+incidents = [item for item in load("/api/incidents" + scope) if item["severity"] in severities]
+support = load("/api/support")
+quality = load("/api/quality")
+requests_total = sum(row["requests"] for row in services)
+failures_total = sum(row["failures"] for row in services)
+availability = 100 * (requests_total - failures_total) / requests_total if requests_total else None
+open_items = [item for item in incidents if item["status"] != "Mitigated"]
+a, b, c, d = st.columns(4)
+a.metric("Request success (sample)", f"{availability:.2f}%" if availability is not None else "No data")
+b.metric("Open incidents in scope", len(open_items))
+c.metric("P1 in scope", sum(item["severity"] == "P1" for item in open_items))
+d.metric("Telemetry records in scope", requests_total)
+st.caption("Success SLI = requests without HTTP 5xx / all requests. The 99% target and burn ratio are illustrative sample-window measures, not a 30-day SLO.")
+if services:
+    st.subheader("Service health and ownership")
+    st.dataframe(pd.DataFrame(services), hide_index=True, use_container_width=True)
+    newest = max(datetime.fromisoformat(item["last_sample"]) for item in services)
+    age = (datetime.now(timezone.utc) - newest).total_seconds() / 3600
+    st.caption(f"Latest sample: {newest.isoformat()} · age: {age:.1f} hours. Historical fixture data is intentionally dated.")
 else:
-    st.info("No incidents match the selected filters.")
+    st.warning("No telemetry for this scope. Ingest records below.")
+if traffic:
+    frame = pd.DataFrame(traffic)
+    frame["time"] = pd.to_datetime(frame["time"], utc=True)
+    frame = frame.set_index("time")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Request volume")
+        st.line_chart(frame[["requests"]])
+    with right:
+        st.subheader("HTTP 5xx rate (%)")
+        st.line_chart(frame[["error_rate_pct"]])
 
-st.subheader("Incident triage")
-if incident_rows:
-    chosen_id = st.selectbox("Choose an incident", [row["id"] for row in incident_rows])
-    incident = next(row for row in incident_rows if row["id"] == chosen_id)
-    triage = api_get(f"/api/triage/{quote(chosen_id, safe='')}")
-    detail, guidance = st.columns([1, 2])
-    with detail:
-        st.markdown(f"**{incident['severity']} · {incident['service']}**")
-        st.write(f"Signal: {incident['signal']}")
-        st.write(f"Customer impact: {incident['impact']}")
-        st.write(f"Status: {incident['status']}")
-        st.write(f"Source: {incident['source']}")
-    with guidance:
-        st.markdown("**Suggested first checks**")
-        st.write(triage["runbook"])
-        st.caption("Rule-based guidance from the demo runbook map. Verify against live service procedures.")
-
+st.subheader("Support operations · all services")
+a, b, c = st.columns(3)
+a.metric("Open backlog", support["open"])
+b.metric("Oldest open (minutes)", support["oldest_open_minutes"])
+c.metric("Mean time to mitigation (minutes)", support["mean_resolution_minutes"] if support["mean_resolution_minutes"] is not None else "No mitigations")
+st.caption(f"Resolution statistic uses {support['resolved_count']} currently mitigated incidents; reopened incidents are excluded. Zero-duration demo updates are not production benchmarks.")
+st.subheader("Incident queue")
+if incidents:
+    st.dataframe(pd.DataFrame(incidents)[["id", "service", "severity", "signal", "impact", "status", "opened_at"]], hide_index=True, use_container_width=True)
+    selected = st.selectbox("Incident", [item["id"] for item in incidents])
+    incident = next(item for item in incidents if item["id"] == selected)
+    triage = load("/api/triage/" + selected)
+    st.write(triage["summary"])
+    st.markdown("**First checks · human approval required for operational changes**")
+    st.text(triage["runbook"])
+    with st.expander("Evidence and tool trace"):
+        st.write(" → ".join(triage["tool_trace"]))
+        st.write("Citations: " + ", ".join(triage["citations"]))
+        st.json(triage["evidence"])
     with st.expander("Incident history"):
-        events = api_get(f"/api/incidents/{quote(chosen_id, safe='')}/events")
-        if events:
-            st.dataframe(pd.DataFrame(events), hide_index=True, use_container_width=True)
-        else:
-            st.caption("No status changes recorded yet.")
-
-    with st.form("status_update"):
-        statuses = ["Investigating", "Monitoring", "Awaiting owner", "Mitigated"]
-        status = st.selectbox("Update status", statuses, index=statuses.index(incident["status"]))
-        note = st.text_input("Update note", placeholder="What changed? (optional)")
-        update_status = st.form_submit_button("Save status update")
-    if update_status:
-        result = api_write("PATCH", f"/api/incidents/{quote(chosen_id, safe='')}", {"status": status, "note": note, "actor": "dashboard"})
+        st.dataframe(pd.DataFrame(load(f"/api/incidents/{selected}/events")), hide_index=True, use_container_width=True)
+    with st.form("status-" + selected):
+        new_status = st.selectbox("New status", STATUSES, index=STATUSES.index(incident["status"]))
+        note = st.text_input("Update note")
+        save = st.form_submit_button("Save update")
+    if save:
+        result = call("PATCH", "/api/incidents/" + selected, {"status": new_status, "note": note, "expected_version": incident["version"]})
         if result:
-            st.success("Incident updated and history recorded.")
+            st.rerun()
+    with st.expander("Optional local LLM draft"):
+        st.caption("Uses the API server's configured Ollama endpoint. Model output is unverified and cannot execute tools or send messages.")
+        if st.button("Draft from evidence"):
+            result = call("POST", "/api/agent/" + selected, {"use_llm": True})
+            if result:
+                st.write(result["llm_status"])
+                st.text(result.get("llm_draft", result["summary"]))
+else:
+    st.info("No incidents match the filters.")
+
+with st.expander("Create support alert"):
+    if "alert_key" not in st.session_state:
+        st.session_state.alert_key = uuid.uuid4().hex
+    with st.form("new-alert"):
+        service = st.selectbox("Affected service", SERVICES)
+        severity = st.selectbox("Alert severity", ["P1", "P2", "P3"], index=1)
+        signal = st.text_input("Observed signal", "Elevated error rate")
+        impact = st.text_input("Reported impact", "Demo team")
+        create = st.form_submit_button("Create incident")
+    if create:
+        result = call("POST", "/api/alerts", {"service": service, "severity": severity, "signal": signal, "impact": impact, "source": "dashboard"}, {"Idempotency-Key": st.session_state.alert_key})
+        if result:
+            st.session_state.alert_key = uuid.uuid4().hex
             st.rerun()
 
-    with st.expander("Draft customer update"):
-        st.text_area("Status message", value=triage["customer_update"], height=100)
-
-    with st.expander("Optional local LLM draft (Ollama)"):
-        st.caption("The model receives only this selected synthetic incident and its demo runbook. No external model is called.")
-        if st.button("Generate draft with Ollama"):
-            prompt = (
-                "You are drafting a concise internal support update. Use only these incident facts and runbook text; "
-                "do not invent causes, timelines, or impact. State uncertainty.\n\n"
-                + json.dumps({"incident": incident, "runbook": triage["runbook"]}, ensure_ascii=False)
-            )
-            try:
-                response = requests.post(f"{ollama_url}/api/generate", json={"model": ollama_model, "prompt": prompt, "stream": False}, timeout=90)
-                response.raise_for_status()
-                st.text_area("Ollama draft · review before sharing", value=response.json().get("response", ""), height=150)
-            except requests.RequestException as exc:
-                st.error(f"Ollama request failed: {exc}. Start Ollama and pull the selected model, or use the rule-based draft above.")
-else:
-    st.info("Choose filters that include at least one incident to view triage details.")
-
-with st.expander("Create an alert (webhook demo)"):
-    st.write("This form sends a new incident to the API. The same endpoint can receive alerts from approved internal webhooks.")
-    with st.form("new_alert"):
-        service = st.selectbox("Service", SERVICES)
-        severity = st.selectbox("Severity", ["P1", "P2", "P3"])
-        signal = st.text_input("Signal", value="Elevated query latency")
-        impact = st.text_input("Customer impact", value="1 team")
-        source = st.text_input("Source", value="dashboard demo")
-        submit_alert = st.form_submit_button("Create incident")
-    if submit_alert:
-        if not signal.strip():
-            st.error("Signal is required.")
+with st.expander("Telemetry ingestion and data quality"):
+    st.write(f"Stored unique records: {quality['stored_records']}")
+    st.caption("JSONL contract: event_id, at (timezone-aware ISO timestamp), service, status_code, latency_ms, optional message. Use synthetic or approved non-sensitive data only. Up to 1,000 rows per batch.")
+    st.download_button("Download synthetic fixture", "\n".join(json.dumps(row) for row in demo_rows()), "signaldesk-demo.jsonl", "application/x-ndjson")
+    uploaded = st.file_uploader("Upload JSONL telemetry", type=["jsonl"])
+    if uploaded is not None and st.button("Ingest batch"):
+        if uploaded.size > 2_000_000:
+            st.error("Use a file smaller than 2 MB.")
         else:
-            created = api_write("POST", "/api/alerts", {"service": service, "severity": severity, "signal": signal, "impact": impact, "source": source})
-            if created:
-                st.success(f"Created {created['id']}.")
-                st.rerun()
-
-with st.expander("API and observability"):
-    st.write(f"API status: **{health['status']}** · data mode: **{health['data_mode']}**")
-    st.write(f"Prometheus metrics endpoint: [{api_url}/metrics]({api_url}/metrics)")
-    st.code('''$body = @{ service="Spark"; severity="P2"; signal="Executor saturation"; impact="3 teams"; source="prometheus-demo" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/alerts -ContentType application/json -Headers @{ Authorization = "Bearer $env:SIGNALDESK_API_TOKEN" } -Body $body''', language="powershell")
-    st.caption("For local development only. Configure an API token and Slack signing secret before exposing the API beyond localhost.")
+            try:
+                records = [json.loads(line) for line in uploaded.getvalue().decode("utf-8").splitlines() if line.strip()]
+                result = call("POST", "/api/telemetry", {"records": records})
+                if result:
+                    st.json(result)
+                    st.info("Refresh the dashboard to see the updated data. Replaying identical IDs does not duplicate records.")
+            except (ValueError, UnicodeDecodeError):
+                st.error("Each non-empty line must contain valid UTF-8 JSON.")
+    if quality["recent_batches"]:
+        st.dataframe(pd.DataFrame(quality["recent_batches"]), hide_index=True, use_container_width=True)
