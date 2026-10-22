@@ -200,7 +200,7 @@ def test_agent_model_output_is_only_an_unverified_draft(client, monkeypatch):
     item = alert(client)
     class FakeResponse:
         def raise_for_status(self): pass
-        def json(self): return {"response": "Untrusted generated text"}
+        def json(self): return {"message": {"role": "assistant", "content": "Untrusted generated text"}}
     monkeypatch.setattr("api.requests.post", lambda *args, **kwargs: FakeResponse())
     result = client.post(f"/api/agent/{item['id']}", json={"use_llm": True}).json()
     assert result["llm_status"] == "generated_unverified"
