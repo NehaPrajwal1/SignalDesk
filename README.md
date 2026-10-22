@@ -41,7 +41,7 @@ At first API startup, SignalDesk creates signaldesk.db beside api.py and inserts
 
 ## Alert API
 
-POST /api/alerts accepts JSON. If the API token is configured, include Authorization: Bearer <token>.
+POST /api/alerts accepts JSON. If the API token is configured, include Authorization: Bearer TOKEN.
 
     $body = @{ service = "Spark"; severity = "P2"; signal = "Executor saturation"; impact = "3 teams"; source = "webhook-demo" } | ConvertTo-Json
     $headers = @{}
@@ -64,7 +64,7 @@ POST /api/alerts accepts JSON. If the API token is configured, include Authoriza
 
 ## Optional Slack slash command
 
-Create a Slack app slash command named /signaldesk and point its Request URL to https://<your-approved-development-endpoint>/slack/commands. Set the app signing secret before starting the API:
+Create a Slack app slash command named /signaldesk and point its Request URL to https://YOUR_APPROVED_TUNNEL_HOST/slack/commands. Set the app signing secret before starting the API:
 
     $env:SLACK_SIGNING_SECRET = "<Slack app signing secret>"
     uvicorn api:app --reload
