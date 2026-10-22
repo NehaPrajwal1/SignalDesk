@@ -59,13 +59,13 @@ jobs:
         run: docker compose up --build -d
       - name: Verify container readiness and metrics
         run: |
-          curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/api/health
-          curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8501/_stcore/health
+          curl --fail --retry 30 --retry-connrefused --retry-all-errors --retry-delay 2 http://127.0.0.1:8000/api/health
+          curl --fail --retry 30 --retry-connrefused --retry-all-errors --retry-delay 2 http://127.0.0.1:8501/_stcore/health
           curl --fail http://127.0.0.1:8000/metrics | grep signaldesk_open_incidents
       - name: Verify MCP authentication and real protocol handshake
         run: |
           mkdir -p verification
-          test "$(curl --retry 10 --retry-connrefused --retry-delay 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/mcp)" = "401"
+          test "$(curl --retry 10 --retry-connrefused --retry-all-errors --retry-delay 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/mcp)" = "401"
           curl --fail -s http://127.0.0.1:8001/mcp -H "Authorization: Bearer $SIGNALDESK_MCP_TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' > verification/mcp-initialize.json
           python -c "import json; assert json.load(open('verification/mcp-initialize.json'))['result']['serverInfo']['name'] == 'SignalDesk'"
       - name: Save container logs
