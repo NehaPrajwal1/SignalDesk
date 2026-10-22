@@ -88,6 +88,10 @@ a.metric("Open backlog", support["open"])
 b.metric("Oldest open (minutes)", support["oldest_open_minutes"])
 c.metric("Mean time to mitigation (minutes)", support["mean_resolution_minutes"] if support["mean_resolution_minutes"] is not None else "No mitigations")
 st.caption(f"Resolution statistic uses {support['resolved_count']} currently mitigated incidents; reopened incidents are excluded. Zero-duration demo updates are not production benchmarks.")
+if support["created_daily"]:
+    st.caption("Incident arrivals by day and severity · all services")
+    trends = pd.DataFrame(support["created_daily"]).pivot(index="day", columns="severity", values="incidents").fillna(0)
+    st.bar_chart(trends)
 st.subheader("Incident queue")
 if incidents:
     st.dataframe(pd.DataFrame(incidents)[["id", "service", "severity", "signal", "impact", "status", "opened_at"]], hide_index=True, use_container_width=True)
