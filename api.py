@@ -1,6 +1,8 @@
 from __future__ import annotations
 import hashlib, hmac, os, secrets, sqlite3, time
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import Literal
 from pathlib import Path
 from urllib.parse import parse_qs
 from fastapi import FastAPI, HTTPException, Request
@@ -20,8 +22,17 @@ OPEN = Gauge("signaldesk_open_incidents", "Incidents not marked Mitigated")
 app = FastAPI(title="SignalDesk API", version="1.0.0", description="Incident intake and support workflow demo for a data platform.")
 
 def now(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
+@contextmanager
 def db():
-    c=sqlite3.connect(DB, timeout=10); c.row_factory=sqlite3.Row; return c
+    c=sqlite3.connect(DB, timeout=10); c.row_factory=sqlite3.Row
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 def init_db():
     DB.parent.mkdir(parents=True, exist_ok=True)
     with db() as c:
@@ -35,9 +46,9 @@ def init_db():
 @app.on_event("startup")
 def startup(): init_db()
 class Alert(BaseModel):
-    service:str; severity:str=Field(default="P2", pattern="^P[123]$"); signal:str=Field(min_length=3,max_length=240); impact:str=Field(default="Unknown",max_length=160); source:str=Field(default="webhook",max_length=120)
+    service:str; severity:Literal["P1","P2","P3"]="P2"; signal:str=Field(min_length=3,max_length=240); impact:str=Field(default="Unknown",max_length=160); source:str=Field(default="webhook",max_length=120)
 class StatusUpdate(BaseModel):
-    status:str=Field(pattern="^(Investigating|Monitoring|Awaiting owner|Mitigated)$"); note:str=Field(default="",max_length=500); actor:str=Field(default="dashboard",max_length=80)
+    status:Literal["Investigating","Monitoring","Awaiting owner","Mitigated"]; note:str=Field(default="",max_length=500); actor:str=Field(default="dashboard",max_length=80)
 def asdict(r): return dict(r)
 def auth(req):
     if TOKEN and not secrets.compare_digest(req.headers.get("authorization",""),"Bearer "+TOKEN): raise HTTPException(401,"A valid bearer token is required")
