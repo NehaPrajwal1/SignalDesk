@@ -1,0 +1,71 @@
+name: SignalDesk verification
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Static correctness checks
+        run: ruff check --select E9,F63,F7,F82 .
+      - name: API, data, concurrency, Slack, agent, and dashboard checks
+        run: python -m pytest -q --cov=api --cov=core --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
+      - name: Install Chromium
+        if: matrix.python-version == '3.11'
+        run: python -m playwright install --with-deps chromium
+      - name: Render demo in a real browser
+        if: matrix.python-version == '3.11'
+        run: python scripts/capture_demo.py
+      - name: Record tested environment
+        if: always()
+        run: |
+          mkdir -p verification
+          python -m pip freeze > verification/environment.txt
+          git rev-parse HEAD > verification/commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checks-python-${{ matrix.python-version }}
+          path: verification/
+          retention-days: 30
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start services
+        run: docker compose up --build -d
+      - name: Verify container readiness and metrics
+        run: |
+          curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/api/health
+          curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8501/_stcore/health
+          curl --fail http://127.0.0.1:8000/metrics | grep signaldesk_open_incidents
+      - name: Save container logs
+        if: always()
+        run: |
+          mkdir -p verification
+          docker compose logs > verification/containers.log
+          docker compose down -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-evidence
+          path: verification/
+          retention-days: 30
