@@ -1,3 +1,4 @@
+from pathlib import Path
 """Execute the actual Streamlit script against an actual HTTP API server."""
 import socket
 import threading
@@ -38,7 +39,7 @@ def widget(collection, label):
 
 
 def test_dashboard_loads_and_filters_with_live_api(live_api):
-    page = AppTest.from_file("app.py", default_timeout=20).run()
+    page = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     assert not page.exception
     assert len(page.metric) == 7
     assert widget(page.metric, "Telemetry records in scope").value == "360"
@@ -53,7 +54,7 @@ def test_dashboard_loads_and_filters_with_live_api(live_api):
 def test_dashboard_creates_and_updates_incident(live_api):
     headers = {"Authorization": "Bearer ui-token"}
     before = requests.get(live_api + "/api/incidents", headers=headers, timeout=5).json()
-    page = AppTest.from_file("app.py", default_timeout=20).run()
+    page = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     widget(page.text_input, "Observed signal").set_value("Dashboard integration scenario")
     widget(page.button, "Create incident").click().run()
     assert not page.exception
@@ -70,13 +71,13 @@ def test_dashboard_creates_and_updates_incident(live_api):
 
 def test_dashboard_handles_bad_token(live_api, monkeypatch):
     monkeypatch.setenv("SIGNALDESK_API_TOKEN", "wrong")
-    page = AppTest.from_file("app.py", default_timeout=20).run()
+    page = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     assert not page.exception
     assert any("401" in item.value for item in page.error)
 
 
 def test_dashboard_handles_api_outage(monkeypatch):
     monkeypatch.setenv("SIGNALDESK_API_URL", "http://127.0.0.1:1")
-    page = AppTest.from_file("app.py", default_timeout=20).run()
+    page = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     assert not page.exception
     assert any("unreachable" in item.value for item in page.error)
