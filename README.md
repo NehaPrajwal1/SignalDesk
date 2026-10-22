@@ -6,14 +6,23 @@ A data-platform support workbench: turn raw operational events into customer-fac
 
 **Independent portfolio demo.** Default data is synthetic. This repository does not represent Apple infrastructure or production operating experience. See [role coverage and interview walkthrough](PORTFOLIO.md).
 
+## Four implemented pillars
+
+- Validated workload/container telemetry, a finite live simulator, SQLite history and a five-second dashboard panel.
+- A real MCP server exposing three read-only tools and a bounded Ollama tool-calling loop.
+- Signed Slack webhooks plus an optional Socket Mode bot with channel restrictions and threaded action cards.
+- Non-root containers, pytest protocol/integration tests and GitHub Actions evidence.
+
+See [integration setup and acceptance limits](INTEGRATIONS.md). These are portfolio implementations; real Slack delivery, model quality and production readiness require the listed acceptance work.
+
 ## Start with the evidence
 
 Open [GitHub Actions](https://github.com/NehaPrajwal1/SignalDesk/actions/workflows/verify.yml) and inspect the latest run for the commit you want to evaluate. A green run verifies:
 
 - Behavioral API/data tests and real-HTTP dashboard tests on Python 3.11 and 3.12.
-- A minimum 80% combined line-coverage gate for the API and core, with an XML coverage report.
+- A minimum 80% combined line-coverage gate for the API, core and operational tools, with an XML coverage report.
 - Chromium rendering of both running services and a captured dashboard image.
-- A Docker Compose build, API/database readiness, dashboard readiness, and exposed metrics.
+- A Docker Compose build, API/database readiness, dashboard readiness, exposed metrics, and an authenticated MCP protocol handshake.
 
 Run artifacts include tests.xml, coverage.xml, environment.txt, commit.txt, dashboard.png (Python 3.11), browser-result.json and service logs. Artifacts expire after 30 days and can be regenerated with **Run workflow**. CI success is evidence for that exact code and environment, not a production certification. Live Slack delivery and real Ollama generation are not claimed by protocol/mocked tests.
 
@@ -32,6 +41,9 @@ flowchart LR
     T --> R[Summary, runbook citations, tool trace]
     R --> L[Optional local LLM draft for human review]
     API --> P[Prometheus metrics and request-ID logs]
+    W[Workload and container webhook] --> API
+    T --> MCP[MCP stdio or authenticated HTTP]
+    BOT[Slack Socket Mode action cards] --> API
 ~~~
 
 ## Run without Docker
@@ -56,7 +68,7 @@ Open http://localhost:8501. API docs: http://127.0.0.1:8000/docs.
 docker compose up --build
 ~~~
 
-The stack binds host ports to localhost. SQLite lives in a named volume and survives container replacement. Stop with docker compose down. Removing the runtime-data volume deliberately resets demo records.
+Set SIGNALDESK_API_TOKEN and a distinct SIGNALDESK_MCP_TOKEN in your runtime environment to enable protected API and MCP access. The MCP HTTP service denies access when its token is empty. The stack binds host ports to localhost. SQLite lives in a named volume and survives container replacement. Stop with docker compose down. Removing the runtime-data volume deliberately resets demo records.
 
 ## Demo data and ingestion contract
 
@@ -101,7 +113,11 @@ Repeat an alert with the same key/payload to receive the same ID (200 replay, 20
 | PATCH /api/incidents/{id} | Version-checked status update |
 | GET /api/incidents/{id}/events | Audit history |
 | GET /api/triage/{id} | Evidence, citations and runbook |
-| POST /api/agent/{id} | Same evidence workflow; optional use_llm=true |
+| POST /api/agent/{id} | Bounded dynamic tool investigation; optional use_llm=true |
+| GET /api/investigations/{id} | Latest persisted investigation result |
+| POST /api/workloads | Validated operational event and threshold-triggered alert |
+| GET /api/workloads | Recent workload/container samples |
+| GET /api/tools/{name}?service=Spark | Scoped read-only tool data |
 | POST /slack/commands | Signed Slack command adapter |
 | GET /metrics | Prometheus exposition |
 
@@ -118,13 +134,13 @@ Repeat an alert with the same key/payload to receive the same ID (200 replay, 20
 | OLLAMA_BASE_URL | API server's model URL, default http://127.0.0.1:11434 |
 | OLLAMA_MODEL | qwen2.5:3b; model must be installed separately |
 
-Set environment variables before starting processes. With Docker, configure optional Ollama networking explicitly; container localhost is not the host's Ollama process. Health and metrics remain public on the localhost-bound demo. The shared token is not a multi-user identity system. Do not publicly expose this demo without authentication, request-size/rate limits, TLS, backups and a deployment review.
+Set environment variables before starting processes. Compose includes optional llm, slack and demo profiles; see INTEGRATIONS.md. Health and metrics remain public on the localhost-bound demo. The shared token is not a multi-user identity system. Do not publicly expose this demo without authentication, request-size/rate limits, TLS, backups and a deployment review.
 
 ## Slack and LLM workflow
 
 Configure a Slack app slash command /signaldesk with Request URL https://YOUR_APPROVED_HOST/slack/commands. Commands: status, triage INC-ID, ack INC-ID. The raw-body HMAC signature and five-minute timestamp window are checked before parsing. Retried acknowledgements do not append duplicate audit events. Responses are ephemeral. Credentials belong in runtime configuration, never this repository. A real installation requires your own Slack workspace and secure endpoint.
 
-The support workflow invokes four read-only tools: incident lookup, service SLI query, error-log retrieval and runbook retrieval. The UI shows the tool trace and evidence IDs. Optional Ollama generation receives this evidence, produces an explicitly unverified draft and falls back cleanly when unavailable. Model text never executes commands, writes incident state or posts messages. The deterministic workflow works without a model; the tests do not establish live model quality or immunity to hallucination.
+The baseline workflow assembles incident, SLI, log and runbook evidence. The optional agent dynamically calls fetch_pod_logs, search_runbooks and check_service_health within an incident-scoped allowlist, four model turns and six tool calls. New alerts trigger an investigation; results persist. MCP exposes the same read-only tool data over the real protocol. The Socket Mode bot supports alert commands and threaded investigation buttons in explicitly allowed channels. Model drafts never execute remediation; optional Slack model drafts are clearly marked for human review. See INTEGRATIONS.md for credentials, failure behavior and live acceptance checks.
 
 ## Observability
 
@@ -143,11 +159,11 @@ Ingestion counters are process-lifetime counters for API submissions; database b
 
 ~~~sh
 python -m pip install -r requirements-dev.txt
-python -m pytest -q --cov=api --cov=core --cov-report=term-missing
+python -m pytest -q --cov=api --cov=core --cov=platform_ops --cov-report=term-missing
 python -m playwright install chromium
 python scripts/capture_demo.py
 ~~~
 
 Dependency ranges are resolved at installation time; each CI run records the exact installed versions in its environment artifact. The workflow runs static correctness checks, behavior tests, browser rendering and container smoke checks. See [FastAPI lifespan testing](https://fastapi.tiangolo.com/advanced/testing-events/), [Streamlit AppTest](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest) and [GitHub Actions](https://docs.github.com/en/actions/get-started/quickstart).
 
-The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP/Slack/model adapters), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo; multi-instance service operation, streaming processing, user roles and real service instrumentation remain beyond this implementation.
+The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP adapters), platform_ops.py (workload storage and bounded agent), mcp_server.py (MCP protocol), slack_bot.py (Socket Mode), simulate.py (synthetic stream), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo; multi-instance service operation, streaming processing, user roles and real service instrumentation remain beyond this implementation.
