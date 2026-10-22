@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    image: signaldesk:local
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET:-}"
+      SLACK_TEAM_ID: "${SLACK_TEAM_ID:-}"
+    volumes:
+      - runtime-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  dashboard:
+    image: signaldesk:local
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.headless=true", "--browser.gatherUsageStats=false"]
+    environment:
+      SIGNALDESK_API_URL: http://api:8000
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  runtime-data:
