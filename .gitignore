@@ -1,0 +1,7 @@
+signaldesk.db
+signaldesk.db-*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
