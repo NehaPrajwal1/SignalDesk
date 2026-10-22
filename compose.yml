@@ -6,6 +6,9 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+      OLLAMA_BASE_URL: http://llm:11434
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
+      SIGNALDESK_AUTO_LLM: "${SIGNALDESK_AUTO_LLM:-0}"
       SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET:-}"
       SLACK_TEAM_ID: "${SLACK_TEAM_ID:-}"
     volumes:
@@ -26,5 +29,48 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  mcp:
+    image: signaldesk:local
+    command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      SIGNALDESK_API_URL: http://api:8000
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+      SIGNALDESK_MCP_TOKEN: "${SIGNALDESK_MCP_TOKEN:-}"
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      api:
+        condition: service_healthy
+  simulator:
+    image: signaldesk:local
+    profiles: [demo]
+    command: ["python", "simulate.py", "--count", "60", "--interval", "1"]
+    environment:
+      SIGNALDESK_API_URL: http://api:8000
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+    depends_on:
+      api:
+        condition: service_healthy
+  slack:
+    image: signaldesk:local
+    profiles: [slack]
+    command: ["python", "slack_bot.py"]
+    environment:
+      SIGNALDESK_API_URL: http://api:8000
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:-}"
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN:-}"
+      SLACK_APP_TOKEN: "${SLACK_APP_TOKEN:-}"
+      SLACK_TEAM_ID: "${SLACK_TEAM_ID:-}"
+      SLACK_ALLOWED_CHANNELS: "${SLACK_ALLOWED_CHANNELS:-}"
+      SIGNALDESK_SLACK_LLM: "${SIGNALDESK_SLACK_LLM:-0}"
+    depends_on:
+      api:
+        condition: service_healthy
+  llm:
+    image: ollama/ollama:0.6.8
+    profiles: [llm]
+    volumes:
+      - model-data:/root/.ollama
 volumes:
+  model-data:
   runtime-data:
