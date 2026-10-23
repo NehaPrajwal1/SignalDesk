@@ -35,7 +35,14 @@ def test_operational_alert_replay_and_persisted_investigation(client):
     replay = client.post("/api/workloads", json=event).json()
     assert replay["duplicate"] and replay["incident_id"] == ident
     assert len(client.get("/api/incidents").json()) == 1
-    saved = client.get("/api/investigations/" + ident).json()
+    deadline = time.monotonic() + 5
+    while True:
+        saved = client.get("/api/investigations/" + ident).json()
+        if saved["status"] in {"completed", "failed"}:
+            break
+        if time.monotonic() >= deadline:
+            pytest.fail("Investigation job did not reach a terminal state")
+        time.sleep(0.05)
     assert saved["status"] == "completed"
     assert len(saved["result"]["agent_trace"]) == 3
     assert len(client.get("/api/workloads").json()) == 1

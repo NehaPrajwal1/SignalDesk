@@ -114,7 +114,7 @@ Repeat an alert with the same key/payload to receive the same ID (200 replay, 20
 | GET /api/incidents/{id}/events | Audit history |
 | GET /api/triage/{id} | Evidence, citations and runbook |
 | POST /api/agent/{id} | Bounded dynamic tool investigation; optional use_llm=true |
-| GET /api/investigations/{id} | Latest persisted investigation result |
+| GET /api/investigations/{id} | Latest result or durable job state: queued, running, completed or failed |
 | POST /api/workloads | Validated operational event and threshold-triggered alert |
 | GET /api/workloads | Recent workload/container samples |
 | GET /api/tools/{name}?service=Spark | Scoped read-only tool data |
@@ -140,11 +140,11 @@ Set environment variables before starting processes. Compose includes optional l
 
 Configure a Slack app slash command /signaldesk with Request URL https://YOUR_APPROVED_HOST/slack/commands. Commands: status, triage INC-ID, ack INC-ID. The raw-body HMAC signature and five-minute timestamp window are checked before parsing. Retried acknowledgements do not append duplicate audit events. Responses are ephemeral. Credentials belong in runtime configuration, never this repository. A real installation requires your own Slack workspace and secure endpoint.
 
-The baseline workflow assembles incident, SLI, log and runbook evidence. The optional agent dynamically calls fetch_pod_logs, search_runbooks and check_service_health within an incident-scoped allowlist, four model turns and six tool calls. New alerts trigger an investigation; results persist. MCP exposes the same read-only tool data over the real protocol. The Socket Mode bot supports alert commands and threaded investigation buttons in explicitly allowed channels. Model drafts never execute remediation; optional Slack model drafts are clearly marked for human review. See INTEGRATIONS.md for credentials, failure behavior and live acceptance checks.
+The baseline workflow assembles incident, SLI, log and runbook evidence. The optional agent dynamically calls fetch_pod_logs, search_runbooks and check_service_health within an incident-scoped allowlist, four model turns and six tool calls. New alerts transactionally enqueue a durable SQLite investigation job with the incident. A single API worker claims jobs, retries transient failures with backoff, recovers interrupted work on restart and exposes queue state at GET /api/investigations/{id}. MCP exposes the same read-only tool data over the real protocol. The Socket Mode bot supports alert commands and threaded investigation buttons in explicitly allowed channels. Model drafts never execute remediation; optional Slack model drafts are clearly marked for human review. See INTEGRATIONS.md for credentials, failure behavior and live acceptance checks.
 
 ## Observability
 
-The API exposes signaldesk_http_requests_total, signaldesk_http_duration_seconds, signaldesk_ingestion_rows_total and signaldesk_open_incidents. Request IDs are included in responses and structured logs. Configure a Prometheus scrape target for the reachable API address on port 8000; /metrics is the default metrics path. Useful queries:
+The API exposes signaldesk_http_requests_total, signaldesk_http_duration_seconds, signaldesk_ingestion_rows_total, signaldesk_open_incidents and signaldesk_investigation_jobs by queue status. Request IDs are included in responses and structured logs. Configure a Prometheus scrape target for the reachable API address on port 8000; /metrics is the default metrics path. Useful queries:
 
 ~~~promql
 sum(rate(signaldesk_http_requests_total{status=~"5.."}[5m]))
@@ -166,4 +166,4 @@ python scripts/capture_demo.py
 
 Dependency ranges are resolved at installation time; each CI run records the exact installed versions in its environment artifact. The workflow runs static correctness checks, behavior tests, browser rendering and container smoke checks. See [FastAPI lifespan testing](https://fastapi.tiangolo.com/advanced/testing-events/), [Streamlit AppTest](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest) and [GitHub Actions](https://docs.github.com/en/actions/get-started/quickstart).
 
-The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP adapters), platform_ops.py (workload storage and bounded agent), mcp_server.py (MCP protocol), slack_bot.py (Socket Mode), simulate.py (synthetic stream), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo; multi-instance service operation, streaming processing, user roles and real service instrumentation remain beyond this implementation.
+The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP adapters), platform_ops.py (workload storage and bounded agent), mcp_server.py (MCP protocol), slack_bot.py (Socket Mode), simulate.py (synthetic stream), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo. The durable queue currently has one worker per API process and is designed for a single-node deployment; multi-instance service operation, streaming processing, user roles and real service instrumentation remain beyond this implementation.

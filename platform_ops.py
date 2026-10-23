@@ -46,6 +46,7 @@ def initialize(store):
         conn.execute("CREATE TABLE IF NOT EXISTS workloads(event_id TEXT PRIMARY KEY, at TEXT NOT NULL, service TEXT NOT NULL, pod TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL)")
         conn.execute("CREATE INDEX IF NOT EXISTS workload_service_time ON workloads(service,at)")
         conn.execute("CREATE TABLE IF NOT EXISTS investigations(incident_id TEXT PRIMARY KEY, at TEXT NOT NULL, result TEXT NOT NULL)")
+    store.recover_investigation_jobs()
 
 
 def ingest_workload(store, event):
