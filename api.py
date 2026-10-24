@@ -58,6 +58,7 @@ class AgentOptions(Model):
 
 
 class Login(Model):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     username: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
     password: str = Field(min_length=1, max_length=1024)
 
