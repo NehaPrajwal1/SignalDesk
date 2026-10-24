@@ -6,6 +6,10 @@ A data-platform support workbench: turn raw operational events into customer-fac
 
 **Independent portfolio demo.** Default data is synthetic. This repository does not represent Apple infrastructure or production operating experience. See [role coverage and interview walkthrough](PORTFOLIO.md).
 
+## Operational upgrades
+
+Named local users and viewer/operator/admin roles, revocable sign-in sessions, an authenticated Prometheus Alertmanager receiver, fenced worker leases, verified SQLite backup/restore tools and an initial agent evaluation harness are implemented. See [operating guide](OPERATIONS.md) for setup and remaining live acceptance work. Hosted deployment and a live source/model are not provisioned by merging code.
+
 ## Four implemented pillars
 
 - Validated workload/container telemetry, a finite live simulator, SQLite history and a five-second dashboard panel.
@@ -134,7 +138,7 @@ Repeat an alert with the same key/payload to receive the same ID (200 replay, 20
 | OLLAMA_BASE_URL | API server's model URL, default http://127.0.0.1:11434 |
 | OLLAMA_MODEL | qwen2.5:3b; model must be installed separately |
 
-Set environment variables before starting processes. Compose includes optional llm, slack and demo profiles; see INTEGRATIONS.md. Health and metrics remain public on the localhost-bound demo. The shared token is not a multi-user identity system. Do not publicly expose this demo without authentication, request-size/rate limits, TLS, backups and a deployment review.
+Set environment variables before starting processes. Compose includes optional llm, slack and demo profiles; see INTEGRATIONS.md. Health and metrics remain public on the localhost-bound demo. The legacy shared token is an operator machine credential. Named users, roles and revocable sessions are available through SIGNALDESK_USERS_JSON; use compose.production.yml and the operating guide for authenticated deployment. Do not publicly expose this demo without authentication, request-size/rate limits, TLS, backups and a deployment review.
 
 ## Slack and LLM workflow
 
@@ -166,4 +170,4 @@ python scripts/capture_demo.py
 
 Dependency ranges are resolved at installation time; each CI run records the exact installed versions in its environment artifact. The workflow runs static correctness checks, behavior tests, browser rendering and container smoke checks. See [FastAPI lifespan testing](https://fastapi.tiangolo.com/advanced/testing-events/), [Streamlit AppTest](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest) and [GitHub Actions](https://docs.github.com/en/actions/get-started/quickstart).
 
-The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP adapters), platform_ops.py (workload storage and bounded agent), mcp_server.py (MCP protocol), slack_bot.py (Socket Mode), simulate.py (synthetic stream), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo. The durable queue currently has one worker per API process and is designed for a single-node deployment; multi-instance service operation, streaming processing, user roles and real service instrumentation remain beyond this implementation.
+The code is organized into core.py (storage, normalization, aggregates and evidence workflow), api.py (HTTP adapters), platform_ops.py (workload storage and bounded agent), mcp_server.py (MCP protocol), slack_bot.py (Socket Mode), simulate.py (synthetic stream), app.py (dashboard), tests/ (behavioral verification), and scripts/capture_demo.py (real-browser evidence). The additive migration preserves v1 incidents. SQLite and in-memory p95 calculations suit the small demo. The durable queue uses expiring fenced leases across workers sharing one local SQLite database. Multi-host storage, streaming processing, tenant isolation and live-source acceptance remain beyond this implementation.
