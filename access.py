@@ -46,19 +46,19 @@ class AccessControl:
     def initialize(self):
         with self.store.transaction(True) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS auth_sessions(token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at REAL NOT NULL, config_hash TEXT NOT NULL)")
-            conn.execute("CREATE TABLE IF NOT EXISTS login_limits(client_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, attempts INTEGER NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS login_limits(client_hash TEXT PRIMARY KEY, window_id INTEGER NOT NULL, attempts INTEGER NOT NULL)")
             conn.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (time.time(),))
-            conn.execute("DELETE FROM login_limits WHERE window<?", (int(time.time() // 60) - 1,))
+            conn.execute("DELETE FROM login_limits WHERE window_id<?", (int(time.time() // 60) - 1,))
 
     def config_hash(self, name):
         return hashlib.sha256(json.dumps(self.users[name], sort_keys=True).encode()).hexdigest()
 
     def login(self, username, password, client):
         client_hash = hashlib.sha256(client.encode()).hexdigest()
-        window = int(time.time() // 60)
+        window_id = int(time.time() // 60)
         with self.store.transaction(True) as conn:
-            conn.execute("DELETE FROM login_limits WHERE window<?", (window - 1,))
-            conn.execute("INSERT INTO login_limits VALUES(?,?,1) ON CONFLICT(client_hash) DO UPDATE SET attempts=CASE WHEN window=excluded.window THEN attempts+1 ELSE 1 END,window=excluded.window", (client_hash, window))
+            conn.execute("DELETE FROM login_limits WHERE window_id<?", (window_id - 1,))
+            conn.execute("INSERT INTO login_limits VALUES(?,?,1) ON CONFLICT(client_hash) DO UPDATE SET attempts=CASE WHEN login_limits.window_id=excluded.window_id THEN login_limits.attempts+1 ELSE 1 END,window_id=excluded.window_id", (client_hash, window_id))
             count = conn.execute("SELECT attempts FROM login_limits WHERE client_hash=?", (client_hash,)).fetchone()[0]
         if count > 10:
             raise HTTPException(429, "Too many login attempts", headers={"Retry-After": "60"})
