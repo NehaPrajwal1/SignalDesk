@@ -64,7 +64,10 @@ class Login(Model):
 
 
 def create_app(db_path=None, token=None, slack_secret=None, demo=None):
-    store = Store(db_path or os.getenv("SIGNALDESK_DB_PATH", "signaldesk.db"))
+    database_url = os.getenv("SIGNALDESK_DATABASE_URL", "")
+    if db_path is None and database_url and not database_url.startswith(("postgresql://", "postgres://")):
+        raise ValueError("SIGNALDESK_DATABASE_URL requires a PostgreSQL URL")
+    store = Store(db_path or database_url or os.getenv("SIGNALDESK_DB_PATH", "signaldesk.db"))
     token = os.getenv("SIGNALDESK_API_TOKEN", "") if token is None else token
     slack_secret = os.getenv("SLACK_SIGNING_SECRET", "") if slack_secret is None else slack_secret
     demo = os.getenv("SIGNALDESK_DEMO", "1") == "1" if demo is None else demo
