@@ -41,16 +41,23 @@ class NotFound(ValueError):
 
 class Store:
     def __init__(self, path):
-        self.path = Path(path)
+        self.postgres = str(path).startswith(("postgresql://", "postgres://"))
+        self.path = str(path) if self.postgres else Path(path)
 
     @contextmanager
     def transaction(self, write=False):
-        conn = sqlite3.connect(self.path, timeout=15)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
+        if self.postgres:
+            from database import PostgresConnection
+            conn = PostgresConnection(self.path)
+        else:
+            conn = sqlite3.connect(self.path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
         try:
             if write:
-                conn.execute("BEGIN IMMEDIATE")
+                # Preserve atomic read-then-write semantics across API instances.
+                # This initial PostgreSQL backend serializes write transactions.
+                conn.execute("SELECT pg_advisory_xact_lock(734821905)") if self.postgres else conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -60,7 +67,8 @@ class Store:
             conn.close()
 
     def initialize(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.postgres:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction(True) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS incidents(id TEXT PRIMARY KEY, opened_at TEXT, severity TEXT, service TEXT, signal TEXT, status TEXT, impact TEXT, source TEXT)")
             # Additive migration preserves records made by the original demo.
