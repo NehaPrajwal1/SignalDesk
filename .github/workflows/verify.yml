@@ -25,10 +25,12 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - name: Static correctness checks
         run: |
-          python -m compileall -q api.py core.py app.py platform_ops.py mcp_server.py slack_bot.py simulate.py tests
+          python -m compileall -q api.py core.py app.py platform_ops.py mcp_server.py slack_bot.py simulate.py access.py alertmanager.py manage.py tests
           ruff check --select E9,F63,F7,F82 .
       - name: API, data, concurrency, Slack, agent, and dashboard checks
-        run: python -m pytest -q --cov=api --cov=core --cov=platform_ops --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
+        run: python -m pytest -q --cov=api --cov=core --cov=platform_ops --cov=access --cov=alertmanager --cov=manage --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
+      - name: Save labeled evaluation baseline
+        run: python manage.py evaluate > verification/baseline-evaluation.json
       - name: Install Chromium
         if: matrix.python-version == '3.11'
         run: python -m playwright install --with-deps chromium
