@@ -140,8 +140,15 @@ def investigate_agent(store, ident, use_llm=False, post=None):
     return result
 
 
-def save_investigation(store, ident, use_llm=False):
+def save_investigation(store, ident, use_llm=False, lease_token=None):
     result = investigate_agent(store, ident, use_llm)
     with store.transaction(True) as conn:
+        job = conn.execute("SELECT status,lease_token,lease_until FROM investigation_jobs WHERE incident_id=?", (ident,)).fetchone()
+        if lease_token is not None:
+            if not job or job["status"] != "running" or job["lease_token"] != lease_token or (job["lease_until"] or 0) <= time.time():
+                raise Conflict("Investigation worker lease expired")
+        elif job and job["status"] == "running":
+            raise Conflict("An investigation is already running")
         conn.execute("INSERT INTO investigations VALUES(?,?,?) ON CONFLICT(incident_id) DO UPDATE SET at=excluded.at,result=excluded.result", (ident, utcnow(), json.dumps(result)))
+        conn.execute("UPDATE investigation_jobs SET status='completed',updated_at=?,last_error=NULL,lease_token=NULL,lease_until=NULL WHERE incident_id=?", (time.time(), ident))
     return result
