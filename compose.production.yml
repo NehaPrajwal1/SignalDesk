@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     environment:
       SIGNALDESK_DEMO: "0"
+      SIGNALDESK_DATABASE_URL: "${SIGNALDESK_DATABASE_URL:-}"
+      SIGNALDESK_DB_PATH: "${SIGNALDESK_DB_PATH:-/data/signaldesk.db}"
       SIGNALDESK_REQUIRE_AUTH: "1"
       SIGNALDESK_USERS_JSON: "${SIGNALDESK_USERS_JSON:?Set named users with password hashes}"
       SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:?Set a machine API token}"
