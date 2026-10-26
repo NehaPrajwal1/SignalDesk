@@ -72,10 +72,13 @@ def test_expiration_relogin_and_configuration_change(client, monkeypatch, users)
     assert error.value.status_code == 401
 
 
-def test_login_throttle_and_invalid_credentials(client):
+def test_login_throttle_and_invalid_credentials(client, monkeypatch):
+    monkeypatch.setattr("access.time.time", lambda: 1800000000.0)
     for _ in range(10):
         assert client.post("/api/auth/login", json={"username": "unknown", "password": PASSWORD}).status_code == 401
     assert client.post("/api/auth/login", json={"username": "viewer", "password": PASSWORD}).status_code == 429
+    monkeypatch.setattr("access.time.time", lambda: 1800000060.0)
+    assert client.post("/api/auth/login", json={"username": "viewer", "password": PASSWORD}).status_code == 200
     assert client.get("/api/incidents").status_code == 401
     assert client.get("/api/admin/queue", headers={"Authorization": "Bearer legacy-service"}).status_code == 403
 
