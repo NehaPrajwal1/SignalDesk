@@ -9,7 +9,7 @@ import tempfile
 import time
 
 import requests
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def free_port():
@@ -50,11 +50,14 @@ def main():
                 page = browser.new_page(viewport={"width": 1440, "height": 1100})
                 page.goto(f"http://127.0.0.1:{ui_port}")
                 page.get_by_role("heading", name="Incident queue", exact=True).wait_for(timeout=60000)
-                assert page.get_by_text("Request success (sample)", exact=True).is_visible()
-                assert page.get_by_text("Service health and ownership", exact=True).is_visible()
-                assert page.locator('[data-testid="stException"]').count() == 0
-                page.screenshot(path=str(output / "dashboard.png"), full_page=True)
-                browser.close()
+                try:
+                    expect(page.get_by_text("Request success (sample)", exact=True)).to_be_visible(timeout=60000)
+                    expect(page.get_by_text("Service health and ownership", exact=True)).to_be_visible(timeout=60000)
+                    expect(page.locator('[data-testid="stException"]')).to_have_count(0)
+                finally:
+                    (output / "browser-text.txt").write_text(page.locator("body").inner_text())
+                    page.screenshot(path=str(output / "dashboard.png"), full_page=True)
+                    browser.close()
             (output / "browser-result.json").write_text(json.dumps({"result": "passed", "checks": ["API readiness", "dashboard HTTP readiness", "rendered telemetry", "rendered incident queue", "no Streamlit exception"], "data": "deterministic synthetic fixture"}, indent=2))
         finally:
             for process in reversed(processes):

@@ -17,7 +17,37 @@ api_url = os.getenv("SIGNALDESK_API_URL", "http://127.0.0.1:8000").rstrip("/")
 with st.sidebar:
     st.header("Workspace")
     st.caption(f"API: {api_url}")
-    token = st.text_input("API token", os.getenv("SIGNALDESK_API_TOKEN", ""), type="password")
+    try:
+        config_response = requests.get(api_url + "/api/auth/config", timeout=5)
+        config_response.raise_for_status()
+        login_enabled = config_response.json().get("login_enabled", False)
+    except (requests.RequestException, ValueError):
+        login_enabled = False
+    if login_enabled and not st.session_state.get("auth_token"):
+        with st.form("sign-in", clear_on_submit=True):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            sign_in = st.form_submit_button("Sign in")
+        if sign_in:
+            try:
+                response = requests.post(api_url + "/api/auth/login", json={"username": username, "password": password}, timeout=15)
+                response.raise_for_status()
+                st.session_state.auth_token = response.json()["access_token"]
+                st.rerun()
+            except (requests.RequestException, ValueError, KeyError):
+                st.error("Sign-in failed. Check your credentials or try again later.")
+        st.stop()
+    if login_enabled:
+        token = st.session_state.auth_token
+        if st.button("Sign out"):
+            try:
+                requests.post(api_url + "/api/auth/logout", headers={"Authorization": "Bearer " + token}, timeout=5)
+            except requests.RequestException:
+                pass
+            del st.session_state.auth_token
+            st.rerun()
+    else:
+        token = st.text_input("API token", os.getenv("SIGNALDESK_API_TOKEN", ""), type="password")
     chosen_service = st.selectbox("Service scope", ["All services", *SERVICES])
     severities = st.multiselect("Severity", ["P1", "P2", "P3"], default=["P1", "P2", "P3"])
     if st.button("Refresh"):
@@ -45,6 +75,9 @@ def load(path):
 
 
 health = load("/api/health")
+identity = load("/api/auth/me")
+can_write = identity["role"] in {"operator", "admin"}
+st.sidebar.caption(f"Signed in as {identity['username']} · {identity['role']}")
 st.info(f"Data source: {health['data_mode']}. Charts describe the stored sample window; they are not a live production availability claim.")
 scope = "" if chosen_service == "All services" else "?service=" + quote(chosen_service)
 services = load("/api/services" + scope)
@@ -114,14 +147,14 @@ if incidents:
     with st.form("status-" + selected):
         new_status = st.selectbox("New status", STATUSES, index=STATUSES.index(incident["status"]))
         note = st.text_input("Update note")
-        save = st.form_submit_button("Save update")
+        save = st.form_submit_button("Save update", disabled=not can_write)
     if save:
         result = call("PATCH", "/api/incidents/" + selected, {"status": new_status, "note": note, "expected_version": incident["version"]})
         if result:
             st.rerun()
     with st.expander("Optional local LLM draft"):
         st.caption("Uses the API server's configured Ollama endpoint. The model can select three read-only evidence tools. Its draft is unverified; this UI sends no messages and executes no remediation.")
-        if st.button("Draft from evidence"):
+        if st.button("Draft from evidence", disabled=not can_write):
             result = call("POST", "/api/agent/" + selected, {"use_llm": True})
             if result:
                 st.write(result["llm_status"])
@@ -138,7 +171,7 @@ with st.expander("Create support alert"):
         severity = st.selectbox("Alert severity", ["P1", "P2", "P3"], index=1)
         signal = st.text_input("Observed signal", "Elevated error rate")
         impact = st.text_input("Reported impact", "Demo team")
-        create = st.form_submit_button("Create incident")
+        create = st.form_submit_button("Create incident", disabled=not can_write)
     if create:
         result = call("POST", "/api/alerts", {"service": service, "severity": severity, "signal": signal, "impact": impact, "source": "dashboard"}, {"Idempotency-Key": st.session_state.alert_key})
         if result:
@@ -150,7 +183,7 @@ with st.expander("Telemetry ingestion and data quality"):
     st.caption("JSONL contract: event_id, at (timezone-aware ISO timestamp), service, status_code, latency_ms, optional message. Use synthetic or approved non-sensitive data only. Up to 1,000 rows per batch.")
     st.download_button("Download synthetic fixture", "\n".join(json.dumps(row) for row in demo_rows()), "signaldesk-demo.jsonl", "application/x-ndjson")
     uploaded = st.file_uploader("Upload JSONL telemetry", type=["jsonl"])
-    if uploaded is not None and st.button("Ingest batch"):
+    if uploaded is not None and st.button("Ingest batch", disabled=not can_write):
         if uploaded.size > 2_000_000:
             st.error("Use a file smaller than 2 MB.")
         else:

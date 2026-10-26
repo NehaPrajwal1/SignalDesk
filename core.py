@@ -41,16 +41,23 @@ class NotFound(ValueError):
 
 class Store:
     def __init__(self, path):
-        self.path = Path(path)
+        self.postgres = str(path).startswith(("postgresql://", "postgres://"))
+        self.path = str(path) if self.postgres else Path(path)
 
     @contextmanager
     def transaction(self, write=False):
-        conn = sqlite3.connect(self.path, timeout=15)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
+        if self.postgres:
+            from database import PostgresConnection
+            conn = PostgresConnection(self.path)
+        else:
+            conn = sqlite3.connect(self.path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
         try:
             if write:
-                conn.execute("BEGIN IMMEDIATE")
+                # Preserve atomic read-then-write semantics across API instances.
+                # This initial PostgreSQL backend serializes write transactions.
+                conn.execute("SELECT pg_advisory_xact_lock(734821905)") if self.postgres else conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -60,7 +67,8 @@ class Store:
             conn.close()
 
     def initialize(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.postgres:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction(True) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS incidents(id TEXT PRIMARY KEY, opened_at TEXT, severity TEXT, service TEXT, signal TEXT, status TEXT, impact TEXT, source TEXT)")
             # Additive migration preserves records made by the original demo.
@@ -87,6 +95,10 @@ class Store:
                 last_error TEXT
             )""")
             conn.execute("CREATE INDEX IF NOT EXISTS investigation_jobs_ready ON investigation_jobs(status,available_at,created_at)")
+            job_columns = {row[1] for row in conn.execute("PRAGMA table_info(investigation_jobs)")}
+            for name, kind in {"lease_token": "TEXT", "lease_until": "REAL"}.items():
+                if name not in job_columns:
+                    conn.execute(f"ALTER TABLE investigation_jobs ADD COLUMN {name} {kind}")
 
     def incidents(self, service=None, limit=200):
         with self.transaction() as conn:
@@ -102,7 +114,7 @@ class Store:
             raise NotFound("Incident not found")
         return dict(row)
 
-    def create(self, data, key=None, use_llm=False):
+    def create(self, data, key=None, use_llm=False, actor="alert intake"):
         payload_digest = digest(data)
         with self.transaction(True) as conn:
             if key:
@@ -114,39 +126,40 @@ class Store:
             ident = "INC-" + uuid.uuid4().hex[:12].upper()
             stamp = utcnow()
             conn.execute("INSERT INTO incidents(id,opened_at,severity,service,signal,status,impact,source,updated_at,request_key,request_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (ident, stamp, data["severity"], data["service"], data["signal"], "Investigating", data["impact"], data["source"], stamp, key, payload_digest))
-            conn.execute("INSERT INTO events(incident_id,at,actor,old_status,new_status,note) VALUES(?,?,?,?,?,?)", (ident, stamp, "alert intake", None, "Investigating", "Alert accepted"))
+            conn.execute("INSERT INTO events(incident_id,at,actor,old_status,new_status,note) VALUES(?,?,?,?,?,?)", (ident, stamp, actor, None, "Investigating", "Alert accepted"))
             now = time.time()
             conn.execute("INSERT INTO investigation_jobs(incident_id,status,use_llm,attempts,available_at,created_at,updated_at) VALUES(?,'queued',?,0,?,?,?)",
                          (ident, int(use_llm), now, now, now))
             return self.incident(ident, conn), False
 
+    def _recover_expired_jobs(self, conn, now):
+        conn.execute("UPDATE investigation_jobs SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,available_at=?,updated_at=?,lease_token=NULL,lease_until=NULL,last_error='WorkerLeaseExpired' WHERE status='running' AND (lease_until IS NULL OR lease_until<=?)", (now, now, now))
+
     def claim_investigation_job(self):
+        now = time.time()
         with self.transaction(True) as conn:
-            row = conn.execute("SELECT incident_id,use_llm FROM investigation_jobs WHERE status='queued' AND available_at<=? ORDER BY created_at,incident_id LIMIT 1", (time.time(),)).fetchone()
+            self._recover_expired_jobs(conn, now)
+            row = conn.execute("SELECT incident_id,use_llm FROM investigation_jobs WHERE status='queued' AND available_at<=? AND attempts<5 ORDER BY created_at,incident_id LIMIT 1", (now,)).fetchone()
             if row is None:
                 return None
-            conn.execute("UPDATE investigation_jobs SET status='running',attempts=attempts+1,updated_at=?,last_error=NULL WHERE incident_id=? AND status='queued'", (time.time(), row["incident_id"]))
-            return {"incident_id": row["incident_id"], "use_llm": bool(row["use_llm"])}
+            lease = uuid.uuid4().hex
+            conn.execute("UPDATE investigation_jobs SET status='running',attempts=attempts+1,updated_at=?,last_error=NULL,lease_token=?,lease_until=? WHERE incident_id=?", (now, lease, now + 120, row["incident_id"]))
+            return {"incident_id": row["incident_id"], "use_llm": bool(row["use_llm"]), "lease_token": lease}
 
-    def complete_investigation_job(self, ident):
+    def fail_investigation_job(self, ident, error, lease_token):
         with self.transaction(True) as conn:
-            conn.execute("UPDATE investigation_jobs SET status='completed',updated_at=?,last_error=NULL WHERE incident_id=?", (time.time(), ident))
-
-    def fail_investigation_job(self, ident, error):
-        with self.transaction(True) as conn:
-            row = conn.execute("SELECT attempts FROM investigation_jobs WHERE incident_id=?", (ident,)).fetchone()
+            row = conn.execute("SELECT attempts FROM investigation_jobs WHERE incident_id=? AND status='running' AND lease_token=? AND lease_until>?", (ident, lease_token, time.time())).fetchone()
             if row is None:
-                return
+                return False
             attempts = row["attempts"]
-            failed = attempts >= 5
             delay = min(300, 2 ** max(0, attempts - 1))
-            conn.execute("UPDATE investigation_jobs SET status=?,available_at=?,updated_at=?,last_error=? WHERE incident_id=?",
-                         ("failed" if failed else "queued", time.time() + delay, time.time(), type(error).__name__[:100], ident))
+            conn.execute("UPDATE investigation_jobs SET status=?,available_at=?,updated_at=?,last_error=?,lease_token=NULL,lease_until=NULL WHERE incident_id=?", ("failed" if attempts >= 5 else "queued", time.time() + delay, time.time(), type(error).__name__[:100], ident))
+            return True
 
     def recover_investigation_jobs(self):
         now = time.time()
         with self.transaction(True) as conn:
-            conn.execute("UPDATE investigation_jobs SET status='queued',available_at=?,updated_at=? WHERE status='running'", (now, now))
+            self._recover_expired_jobs(conn, now)
             conn.execute("""INSERT OR IGNORE INTO investigation_jobs(incident_id,status,use_llm,attempts,available_at,created_at,updated_at)
                             SELECT i.id,'queued',0,0,?,?,? FROM incidents i
                             LEFT JOIN investigations x ON x.incident_id=i.id
@@ -155,12 +168,23 @@ class Store:
 
     def investigation_job(self, ident):
         with self.transaction() as conn:
-            row = conn.execute("SELECT status,attempts,last_error,updated_at FROM investigation_jobs WHERE incident_id=?", (ident,)).fetchone()
+            row = conn.execute("SELECT status,attempts,last_error,updated_at,available_at,lease_until FROM investigation_jobs WHERE incident_id=?", (ident,)).fetchone()
             return dict(row) if row else None
 
     def investigation_job_counts(self):
         with self.transaction() as conn:
             return {row["status"]: row["count"] for row in conn.execute("SELECT status,COUNT(*) AS count FROM investigation_jobs GROUP BY status")}
+
+    def retry_investigation_job(self, ident, actor):
+        with self.transaction(True) as conn:
+            self.incident(ident, conn)
+            row = conn.execute("SELECT status FROM investigation_jobs WHERE incident_id=?", (ident,)).fetchone()
+            if row is None or row["status"] != "failed":
+                raise Conflict("Only failed jobs can be retried")
+            now = time.time()
+            conn.execute("UPDATE investigation_jobs SET status='queued',attempts=0,available_at=?,updated_at=?,last_error=NULL,lease_token=NULL,lease_until=NULL WHERE incident_id=?", (now, now, ident))
+            conn.execute("INSERT INTO events(incident_id,at,actor,note) VALUES(?,?,?,?)", (ident, utcnow(), actor, "Failed investigation requeued"))
+        return self.investigation_job(ident)
 
     def _update(self, conn, ident, status, note, actor, expected_version=None):
         old = self.incident(ident, conn)
@@ -244,7 +268,7 @@ class Store:
     def support(self):
         with self.transaction() as conn:
             rows = [dict(row) for row in conn.execute("SELECT * FROM incidents")]
-            daily = [dict(row) for row in conn.execute("SELECT substr(opened_at,1,10) day,severity,COUNT(*) incidents FROM incidents GROUP BY day,severity ORDER BY day")]
+            daily = [dict(row) for row in conn.execute("SELECT substr(opened_at,1,10) AS day,severity,COUNT(*) AS incidents FROM incidents GROUP BY substr(opened_at,1,10),severity ORDER BY substr(opened_at,1,10)")]
         now = datetime.now(timezone.utc)
         opened = [row for row in rows if row["status"] != "Mitigated"]
         resolved = [row for row in rows if row["resolved_at"]]

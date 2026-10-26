@@ -1,0 +1,26 @@
+# Combine with compose.yml on a persistent remote host.
+# All host ports remain bound to loopback; terminate TLS at your gateway.
+services:
+  api:
+    restart: unless-stopped
+    environment:
+      SIGNALDESK_DEMO: "0"
+      SIGNALDESK_DATABASE_URL: "${SIGNALDESK_DATABASE_URL:-}"
+      SIGNALDESK_DB_PATH: "${SIGNALDESK_DB_PATH:-/data/signaldesk.db}"
+      SIGNALDESK_REQUIRE_AUTH: "1"
+      SIGNALDESK_USERS_JSON: "${SIGNALDESK_USERS_JSON:?Set named users with password hashes}"
+      SIGNALDESK_API_TOKEN: "${SIGNALDESK_API_TOKEN:?Set a machine API token}"
+      SIGNALDESK_ALERTMANAGER_TOKEN: "${SIGNALDESK_ALERTMANAGER_TOKEN:?Set an independent receiver token}"
+      SIGNALDESK_ALERTMANAGER_SOURCE: "${SIGNALDESK_ALERTMANAGER_SOURCE:-primary}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  dashboard:
+    restart: unless-stopped
+    environment:
+      SIGNALDESK_API_TOKEN: ""
+  mcp:
+    restart: unless-stopped
+    environment:
+      SIGNALDESK_MCP_TOKEN: "${SIGNALDESK_MCP_TOKEN:?Set a separate MCP token}"
