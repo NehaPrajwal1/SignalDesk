@@ -2,7 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import uuid
 
 from fastapi.testclient import TestClient
@@ -29,11 +29,11 @@ def pg_store():
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(name)))
     parts = urlsplit(dsn)
     query = parse_qsl(parts.query) + [("options", "-c search_path=" + name)]
-    isolated = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    isolated = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query, quote_via=quote), parts.fragment))
     store = Store(isolated)
-    store.initialize()
-    initialize(store)
     try:
+        store.initialize()
+        initialize(store)
         yield store
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
