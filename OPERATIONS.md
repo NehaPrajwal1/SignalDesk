@@ -1,6 +1,6 @@
 # Operating SignalDesk beyond the demo
 
-This branch adds named local users, revocable sessions, role checks, an Alertmanager receiver, expiring worker leases, verified SQLite snapshots and a model evaluation harness. A live monitoring system and public host have not been provisioned. These instructions run on your chosen remote host; the developer PC does not need a checkout, Docker, dependencies or model weights.
+This branch adds named local users, revocable sessions, role checks, an Alertmanager receiver, expiring worker leases, verified SQLite snapshots, optional PostgreSQL storage with a guarded migration tool, and a model evaluation harness. A live monitoring system and public host have not been provisioned. These instructions run on your chosen remote host; the developer PC does not need a checkout, Docker, dependencies or model weights.
 
 ## Accounts and roles
 
@@ -78,9 +78,9 @@ Live acceptance: trigger a controlled rule in your actual Prometheus system, con
 
 ## Worker failures and retries
 
-Claims are serialized by SQLite transactions and get a unique lease valid for 120 seconds. Starting another API process preserves unexpired leases. Each claim also recovers expired leases, so recovery does not require another restart. A stale worker cannot persist results or failure state after its lease is replaced. Saving the result and completing the job share one transaction. Retries use exponential backoff and stop after five attempts, including expired attempts. Job status exposes attempts, last failure class and timing. Exception messages are not stored as queue errors.
+Claims are serialized by database write transactions and get a unique lease valid for 120 seconds. Starting another API process preserves unexpired leases. Each claim also recovers expired leases, so recovery does not require another restart. A stale worker cannot persist results or failure state after its lease is replaced. Saving the result and completing the job share one transaction. Retries use exponential backoff and stop after five attempts, including expired attempts. Job status exposes attempts, last failure class and timing. Exception messages are not stored as queue errors.
 
-Admins can inspect GET /api/admin/queue and POST /api/admin/investigations/{id}/retry. Only failed jobs can be requeued, and the admin identity is recorded. Re-running an expired job can execute read-only investigation/model calls again; this is not exactly-once execution. SQLite still requires a single host and local disk. Do not place it on NFS or claim multi-host scaling. PostgreSQL, retention/capacity work and load evidence remain future work. Slack message delivery still needs its own durable outbox.
+Admins can inspect GET /api/admin/queue and POST /api/admin/investigations/{id}/retry. Only failed jobs can be requeued, and the admin identity is recorded. Re-running an expired job can execute read-only investigation/model calls again; this is not exactly-once execution. SQLite still requires a single host and local disk. Do not place it on NFS or claim multi-host scaling. PostgreSQL is available as an alternative backend; retention/capacity work and load evidence remain future work. Slack message delivery still needs its own durable outbox.
 
 ## Verified backup and restore
 
@@ -96,6 +96,25 @@ The tool uses SQLite's online backup API, checks integrity and foreign keys, wri
 For recovery, stop services that read or write the database, run manage.py restore BACKUP NEW_DATABASE on the remote host, and set the API environment override SIGNALDESK_DB_PATH to the new database path before restarting. Use a one-off image/container with the same persistent volume when the API is stopped. Restore revokes all saved login sessions. The tool refuses to overwrite a destination. Inspect record counts and a known incident before switching traffic. Rehearse this on an isolated copy and record the recovery time and checksum. CI covers snapshot validation, persisted incidents, overwrite refusal and session invalidation.
 
 For application rollback, redeploy the previously recorded commit/image. These schema changes are additive; preserve the database and verify compatibility before rollback. If a future migration is destructive, use a validated backup and an explicit recovery plan.
+
+## PostgreSQL and migration from SQLite
+
+Set SIGNALDESK_DATABASE_URL in the remote API secret environment to a PostgreSQL URL. It takes precedence over SIGNALDESK_DB_PATH. Use a private network, a dedicated database/schema and a database user that owns the application schema for startup migrations. For connections across networks, configure TLS certificate validation (for example sslmode=verify-full with the appropriate CA). Keep the URL and password out of Git and logs. The production Compose override forwards this variable to the API. No PostgreSQL server is automatically provisioned.
+
+Multiple API instances can share PostgreSQL. Each database write transaction takes a PostgreSQL advisory transaction lock, preserving the application's atomic read-then-write and queue-claim semantics. Worker lease tokens fence result and failure writes across instances. This initial backend deliberately serializes writes: it supplies shared durable storage, not a measured high-throughput guarantee. There is no connection pool yet; capacity/load testing, pool sizing and narrower locking are required before scaling traffic. Keep all instances on compatible schema versions and synchronize their clocks.
+
+To migrate existing data, stop all API writers and readers first, keep a verified SQLite backup, configure an empty PostgreSQL target, and run the migration from a one-off application container on the remote host:
+
+~~~sh
+docker compose -f compose.yml -f compose.production.yml stop api dashboard mcp slack simulator
+docker compose -f compose.yml -f compose.production.yml run --rm --no-deps -T api python manage.py migrate-sqlite /data/signaldesk.db
+~~~
+
+The target URL comes from SIGNALDESK_DATABASE_URL. The tool validates a consistent read-only SQLite snapshot, rejects a target with application records, checks column compatibility and copies rows in one PostgreSQL transaction. It restores sequence values and resets interrupted jobs. It does not copy login sessions; users must sign in again. The SQLite source is unchanged. Compare the reported table counts, a known incident, audit history and telemetry before restarting services against PostgreSQL. Do not run this against a live target or change traffic before validation. Retain the source and backup for rollback.
+
+PostgreSQL backup and point-in-time recovery should use the database provider's verified backup service or PostgreSQL tools such as pg_dump/pg_restore on the remote host. The manage.py backup/restore commands apply to SQLite files only. After a PostgreSQL restore, revoke rows in auth_sessions before accepting traffic and verify queue state, record counts and a known incident. Rehearse provider recovery separately; CI verifies database behavior and migration, not your hosted backup service.
+
+The PostgreSQL CI job uses a real PostgreSQL 17 service to exercise concurrent idempotent creation and claims, aggregates, sessions/roles, source notifications, rollback, migration refusal on populated targets, retained source data and imported sequence values. This is compatibility and correctness evidence, not a capacity benchmark.
 
 ## Model evaluation
 
@@ -113,6 +132,6 @@ Extend this initial set with labeled real incidents, missing evidence, misleadin
 - Provision the remote host, TLS gateway, independent backup storage and actual monitoring rules.
 - Run the live source and backup/restore acceptance procedures above.
 - Complete real model runs and human scoring; add representative customer incidents.
-- Before multi-host use, migrate storage to PostgreSQL and measure capacity, retention and worker behavior under load.
+- For multiple API hosts, configure PostgreSQL, rehearse the migration/recovery procedure and measure capacity, retention and worker behavior under load.
 - Add organization identity/SSO and tenant isolation if serving multiple organizations.
 - Install and verify real Slack delivery and its durable outbox separately.
