@@ -268,7 +268,7 @@ class Store:
     def support(self):
         with self.transaction() as conn:
             rows = [dict(row) for row in conn.execute("SELECT * FROM incidents")]
-            daily = [dict(row) for row in conn.execute("SELECT substr(opened_at,1,10) day,severity,COUNT(*) incidents FROM incidents GROUP BY day,severity ORDER BY day")]
+            daily = [dict(row) for row in conn.execute("SELECT substr(opened_at,1,10) AS day,severity,COUNT(*) AS incidents FROM incidents GROUP BY substr(opened_at,1,10),severity ORDER BY substr(opened_at,1,10)")]
         now = datetime.now(timezone.utc)
         opened = [row for row in rows if row["status"] != "Mitigated"]
         resolved = [row for row in rows if row["resolved_at"]]
