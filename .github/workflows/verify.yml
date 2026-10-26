@@ -25,7 +25,7 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - name: Static correctness checks
         run: |
-          python -m compileall -q api.py core.py app.py platform_ops.py mcp_server.py slack_bot.py simulate.py access.py alertmanager.py manage.py tests
+          python -m compileall -q api.py core.py app.py platform_ops.py mcp_server.py slack_bot.py simulate.py access.py alertmanager.py manage.py database.py tests
           ruff check --select E9,F63,F7,F82 .
       - name: API, data, concurrency, Slack, agent, and dashboard checks
         run: python -m pytest -q --cov=api --cov=core --cov=platform_ops --cov=access --cov=alertmanager --cov=manage --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80 --junitxml=verification/tests.xml
@@ -47,6 +47,40 @@ jobs:
         if: always()
         with:
           name: checks-python-${{ matrix.python-version }}
+          path: verification/
+          retention-days: 30
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SIGNALDESK_TEST_POSTGRES: postgresql://postgres:ci-test-only@127.0.0.1:5432/signaldesk
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: signaldesk
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d signaldesk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: PostgreSQL transactions, login, webhook and migration checks
+        run: python -m pytest -q tests/test_postgres.py --cov=database --cov=core --cov=access --cov=manage --cov-report=term-missing --cov-report=xml:verification/postgres-coverage.xml --junitxml=verification/postgres-tests.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-evidence
           path: verification/
           retention-days: 30
   containers:
